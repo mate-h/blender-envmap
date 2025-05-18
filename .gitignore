@@ -1,2 +1,5 @@
 output
 assets/*.ktx2
+node_modules
+out
+exr-preview*.vsix

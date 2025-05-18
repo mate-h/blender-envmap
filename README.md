@@ -25,7 +25,7 @@ A command-line tool that generates KTX2 environment maps for the Bevy game engin
 
 Generate environment maps by running:
 ```bash
-blender -b eq2cube.blend --python env_map.py -- assets/ballawley_park_2k.exr
+./main.sh assets/ballawley_park_2k.exr
 ```
 
 The generated files will be saved in the assets directory, using the input filename with specular and diffuse suffixes.
