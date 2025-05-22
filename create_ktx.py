@@ -4,18 +4,9 @@ import os
 import sys
 import subprocess
 import glob
-import argparse
-from rich.console import Console
-from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, TimeElapsedColumn, TimeRemainingColumn
-from rich.panel import Panel
-from rich.table import Table
-
-# Set up rich console
-console = Console()
 
 # Define mip levels (0-9)
 MIP_LEVELS = list(range(9))
-VK_FORMAT = "E5B9G9R9_UFLOAT_PACK32"
 VK_FORMAT = "R16G16B16A16_SFLOAT"
 
 def ensure_directory(path):
@@ -24,8 +15,19 @@ def ensure_directory(path):
         os.makedirs(path, exist_ok=True)
     return path
 
-def create_specular_ktx(input_dir, output_name, output_dir="assets", progress=None):
-    """Create a specular KTX2 file from the cubemap faces."""
+def create_specular_ktx(input_dir, output_name, output_dir="assets", progress=None, task_id=None):
+    """Create a specular KTX2 file from the cubemap faces.
+    
+    Args:
+        input_dir: Directory containing the mip level directories
+        output_name: Base name for output file
+        output_dir: Directory to save the KTX file
+        progress: Optional progress bar instance
+        task_id: Optional task ID for the progress bar
+        
+    Returns:
+        Tuple of (success, file_path, file_size_mb)
+    """
     ensure_directory(output_dir)
     
     # Set output file path
@@ -46,18 +48,16 @@ def create_specular_ktx(input_dir, output_name, output_dir="assets", progress=No
     input_files = []
     missing_files = []
     
-    # Create task for checking files if progress is provided
-    check_task_id = None
-    if progress:
-        check_task_id = progress.add_task("[cyan]Checking specular files", total=len(MIP_LEVELS) * 6)
+    # Update progress if provided
+    if progress and task_id is not None:
+        progress.update(task_id, description="[cyan]Checking specular files", advance=0.2)
+        progress.refresh()
     
     # Add all the input files in mip level order
     for mip_level in MIP_LEVELS:
         mip_dir = os.path.join(input_dir, f"mip{mip_level}")
         if not os.path.exists(mip_dir):
-            console.print(f"[yellow]Warning: Mip directory not found: {mip_dir}[/yellow]")
-            if progress and check_task_id is not None:
-                progress.update(check_task_id, advance=6)  # Skip 6 files
+            # Skip silently
             continue
             
         # Add the 6 faces in correct order
@@ -65,19 +65,12 @@ def create_specular_ktx(input_dir, output_name, output_dir="assets", progress=No
             face_file = os.path.join(mip_dir, f"{i:04d}.exr")
             if not os.path.exists(face_file):
                 missing_files.append(face_file)
-                console.print(f"[bold red]Error: Face file not found: {face_file}[/bold red]")
             else:
                 input_files.append(face_file)
-            
-            # Update progress if available
-            if progress and check_task_id is not None:
-                progress.update(check_task_id, advance=1)
     
     # Check if any files are missing
     if missing_files:
-        console.print(Panel(f"[bold red]Missing {len(missing_files)} required files for specular KTX2[/bold red]", 
-                           title="Error", border_style="red"))
-        return False
+        return False, None, 0
     
     # Add all files to command
     ktx_cmd.extend(input_files)
@@ -85,54 +78,49 @@ def create_specular_ktx(input_dir, output_name, output_dir="assets", progress=No
     # Add output file
     ktx_cmd.append(ktx_path)
     
-    # Create task for KTX creation if progress is provided
-    ktx_task_id = None
-    if progress:
-        ktx_task_id = progress.add_task("[green]Creating specular KTX2", total=1)
-        
-    # Show command in a panel
-    command_str = " ".join(ktx_cmd)
-    console.print(Panel(f"[dim]{command_str}[/dim]", title="[bold blue]Creating specular KTX2 file[/bold blue]", 
-                       expand=False, border_style="blue"))
+    # Update progress if provided
+    if progress and task_id is not None:
+        progress.update(task_id, description="[cyan]Creating specular KTX2", advance=0.3)
+        progress.refresh()
     
     try:
         # Run the command and capture output
         result = subprocess.run(ktx_cmd, capture_output=True, text=True)
-        
-        # Update progress
-        if progress and ktx_task_id is not None:
-            progress.update(ktx_task_id, advance=1)
             
         if result.returncode != 0:
-            console.print(f"[bold red]Error creating KTX file: {result.stderr}[/bold red]")
-            return False
+            return False, None, 0
         
-        # Show success message
-        console.print(f"[bold green]Created[/bold green] {ktx_path}")
+        # Get file size
+        file_size_mb = os.path.getsize(ktx_path) / (1024 * 1024)
         
-        # Get format info
-        format_info = subprocess.run(f"ktx info {ktx_path} | grep vkFormat", 
-                                   shell=True, capture_output=True, text=True)
+        # Update progress if provided
+        if progress and task_id is not None:
+            progress.update(task_id, advance=0.3)
+            progress.refresh()
         
-        # Display format info in a table
-        table = Table(show_header=False)
-        table.add_row("[dim]vkFormat:[/dim]", f"[cyan]{format_info.stdout.strip().split(': ')[1]}[/cyan]")
-        console.print(table)
-        
-        return True
-    except Exception as e:
-        console.print(f"[bold red]Exception during KTX creation: {e}[/bold red]")
-        return False
+        return True, ktx_path, file_size_mb
+    except Exception:
+        return False, None, 0
 
-def create_diffuse_ktx(input_dir, output_name, output_dir="assets", progress=None):
-    """Create a diffuse KTX2 file from the cubemap faces."""
+def create_diffuse_ktx(input_dir, output_name, output_dir="assets", progress=None, task_id=None):
+    """Create a diffuse KTX2 file from the cubemap faces.
+    
+    Args:
+        input_dir: Directory containing the diffuse directory
+        output_name: Base name for output file
+        output_dir: Directory to save the KTX file
+        progress: Optional progress bar instance
+        task_id: Optional task ID for the progress bar
+        
+    Returns:
+        Tuple of (success, file_path, file_size_mb)
+    """
     ensure_directory(output_dir)
     
-    # Use the dedicated diffuse directory instead of mip9
+    # Use the dedicated diffuse directory
     diffuse_dir = os.path.join(input_dir, "diffuse")
     if not os.path.exists(diffuse_dir):
-        console.print(f"[bold red]Error: Diffuse directory not found: {diffuse_dir}[/bold red]")
-        return False
+        return False, None, 0
     
     # Set output file path
     ktx_path = os.path.join(output_dir, f"{output_name}_diffuse.ktx2")
@@ -151,29 +139,22 @@ def create_diffuse_ktx(input_dir, output_name, output_dir="assets", progress=Non
     input_files = []
     missing_files = []
     
-    # Create task for checking files if progress is provided
-    check_task_id = None
-    if progress:
-        check_task_id = progress.add_task("[cyan]Checking diffuse files", total=6)
+    # Update progress if provided
+    if progress and task_id is not None:
+        progress.update(task_id, description="[cyan]Checking diffuse files", advance=0.1)
+        progress.refresh()
     
     # Add the 6 faces in correct order
     for i in range(1, 7):
         face_file = os.path.join(diffuse_dir, f"{i:04d}.exr")
         if not os.path.exists(face_file):
             missing_files.append(face_file)
-            console.print(f"[bold red]Error: Diffuse face file not found: {face_file}[/bold red]")
         else:
             input_files.append(face_file)
-        
-        # Update progress if available
-        if progress and check_task_id is not None:
-            progress.update(check_task_id, advance=1)
     
     # Check if any files are missing
     if missing_files:
-        console.print(Panel(f"[bold red]Missing {len(missing_files)} required files for diffuse KTX2[/bold red]", 
-                           title="Error", border_style="red"))
-        return False
+        return False, None, 0
     
     # Add all files to command
     ktx_cmd.extend(input_files)
@@ -181,89 +162,91 @@ def create_diffuse_ktx(input_dir, output_name, output_dir="assets", progress=Non
     # Add output file
     ktx_cmd.append(ktx_path)
     
-    # Create task for KTX creation if progress is provided
-    ktx_task_id = None
-    if progress:
-        ktx_task_id = progress.add_task("[green]Creating diffuse KTX2", total=1)
-    
-    # Show command in a panel
-    command_str = " ".join(ktx_cmd)
-    console.print(Panel(f"[dim]{command_str}[/dim]", title="[bold blue]Creating diffuse KTX2 file[/bold blue]", 
-                       expand=False, border_style="blue"))
+    # Update progress if provided
+    if progress and task_id is not None:
+        progress.update(task_id, description="[cyan]Creating diffuse KTX2", advance=0.1)
+        progress.refresh()
     
     try:
         # Run the command and capture output
         result = subprocess.run(ktx_cmd, capture_output=True, text=True)
-        
-        # Update progress
-        if progress and ktx_task_id is not None:
-            progress.update(ktx_task_id, advance=1)
             
         if result.returncode != 0:
-            console.print(f"[bold red]Error creating diffuse KTX file: {result.stderr}[/bold red]")
-            return False
+            return False, None, 0
         
-        # Show success message
-        console.print(f"[bold green]Created[/bold green] {ktx_path}")
+        # Get file size
+        file_size_mb = os.path.getsize(ktx_path) / (1024 * 1024)
         
-        # Get format info
-        format_info = subprocess.run(f"ktx info {ktx_path} | grep vkFormat", 
-                                   shell=True, capture_output=True, text=True)
+        # Update progress if provided
+        if progress and task_id is not None:
+            progress.update(task_id, advance=0.1)
+            progress.refresh()
         
-        # Display format info in a table
-        table = Table(show_header=False)
-        table.add_row("[dim]vkFormat:[/dim]", f"[cyan]{format_info.stdout.strip().split(': ')[1]}[/cyan]")
-        console.print(table)
-        
-        return True
-    except Exception as e:
-        console.print(f"[bold red]Exception during diffuse KTX creation: {e}[/bold red]")
-        return False
+        return True, ktx_path, file_size_mb
+    except Exception:
+        return False, None, 0
 
-def main():
-    """Process command line arguments and create KTX files."""
-    parser = argparse.ArgumentParser(description="Create KTX2 files from cubemap faces")
-    parser.add_argument("--input", default="output/cropped", help="Input directory containing roughness subdirectories")
-    parser.add_argument("--output", default="assets", help="Output directory for KTX files")
-    parser.add_argument("--name", default="cubemap", help="Base name for output KTX files")
-    args = parser.parse_args()
+def create_ktx_files(input_dir="output/cropped", output_name="cubemap", output_dir="assets", progress=None, task_id=None):
+    """Create both specular and diffuse KTX2 files.
     
-    # Display a fancy header
-    console.print(Panel("[bold]KTX2 Environment Map Generator[/bold]", 
-                       subtitle="Creating PBR cubemaps for Bevy", 
-                       border_style="cyan"))
-    
-    # Show settings table
-    settings = Table(show_header=True, header_style="bold cyan")
-    settings.add_column("Setting")
-    settings.add_column("Value")
-    settings.add_row("Input Path", args.input)
-    settings.add_row("Output Path", args.output)
-    settings.add_row("Base Name", args.name)
-    console.print(settings)
-    
-    # Create rich progress display
-    with Progress(
-        TextColumn("[bold blue]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        TimeElapsedColumn(),
-        TimeRemainingColumn(),
-        console=console
-    ) as progress:
-        # Create specular KTX
-        if not create_specular_ktx(args.input, args.name, args.output, progress):
-            console.print("[bold red]Failed to create specular KTX[/bold red]")
-            sys.exit(1)
+    Args:
+        input_dir: Directory containing the mip level and diffuse directories
+        output_name: Base name for output files
+        output_dir: Directory to save the KTX files
+        progress: Optional progress bar instance
+        task_id: Optional task ID for the progress bar
         
-        # Create diffuse KTX
-        if not create_diffuse_ktx(args.input, args.name, args.output, progress):
-            console.print("[bold red]Failed to create diffuse KTX[/bold red]")
-            sys.exit(1)
+    Returns:
+        Tuple of (success, dict_with_file_info)
+    """
+    # Update initial progress
+    if progress and task_id is not None:
+        progress.update(task_id, total=1.0, completed=0.0, description="[cyan]Creating KTX files")
+        progress.refresh()
     
-    # Show success message
-    console.print(Panel(f"[bold green]Successfully created KTX files in {args.output} directory[/bold green]", 
-                       border_style="green"))
+    # Create specular KTX
+    spec_success, spec_path, spec_size = create_specular_ktx(input_dir, output_name, output_dir, progress, task_id)
+    if not spec_success:
+        return False, {}
+    
+    # Create diffuse KTX
+    diff_success, diff_path, diff_size = create_diffuse_ktx(input_dir, output_name, output_dir, progress, task_id)
+    if not diff_success:
+        return False, {}
+    
+    # Update final progress
+    if progress and task_id is not None:
+        progress.update(task_id, completed=1.0, description="[cyan]KTX files created")
+        progress.refresh()
+    
+    # Return success and file info
+    return True, {
+        "specular": {"path": spec_path, "size_mb": spec_size},
+        "diffuse": {"path": diff_path, "size_mb": diff_size}
+    }
 
+# Keep a simple main function for command-line use
 if __name__ == "__main__":
-    main() 
+    # Parse command line arguments manually
+    input_dir = "output/cropped"
+    output_name = "cubemap"
+    output_dir = "assets"
+    
+    # Simple argument parsing
+    args = sys.argv[1:]
+    for i, arg in enumerate(args):
+        if arg == "--input" and i+1 < len(args):
+            input_dir = args[i+1]
+        elif arg == "--output" and i+1 < len(args):
+            output_dir = args[i+1]
+        elif arg == "--name" and i+1 < len(args):
+            output_name = args[i+1]
+    
+    # Run the main function
+    success, file_info = create_ktx_files(input_dir, output_name, output_dir)
+    
+    if not success:
+        sys.exit(1)
+    
+    # Successfully exit
+    sys.exit(0) 

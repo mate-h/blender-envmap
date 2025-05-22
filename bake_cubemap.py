@@ -16,6 +16,98 @@ def get_cube_probe():
         sys.exit(1)
     return cube_probe
 
+def set_environment_texture(texture_path):
+    """Set the environment texture for the world."""
+    # Make sure we have a world
+    if not bpy.data.worlds:
+        print("Error: No world found in the scene!")
+        return False
+    
+    world = bpy.data.worlds[0]
+    
+    # Verify world uses nodes
+    if not world.use_nodes:
+        print("Error: World does not use nodes!")
+        return False
+    
+    nodes = world.node_tree.nodes
+    
+    # Find Environment Texture node
+    env_tex_node = None
+    for node in nodes:
+        if node.type == 'TEX_ENVIRONMENT':
+            env_tex_node = node
+            break
+    
+    if not env_tex_node:
+        print("Error: Environment Texture node not found in the world node tree!")
+        return False
+    
+    # Load and assign the texture
+    try:
+        # Check if the image is already loaded
+        image = None
+        for img in bpy.data.images:
+            if img.filepath == texture_path:
+                image = img
+                break
+        
+        if not image:
+            # Load the image
+            image = bpy.data.images.load(texture_path)
+        
+        # Set the texture
+        env_tex_node.image = image
+        print(f"Successfully set environment texture to: {texture_path}")
+        return True
+        
+    except Exception as e:
+        print(f"Error setting environment texture: {e}")
+        return False
+
+def set_clampat_value(clamp_value):
+    """Set the value of the clampat node in the world shader."""
+    # Make sure we have a world
+    if not bpy.data.worlds:
+        print("Error: No world found in the scene!")
+        return False
+    
+    world = bpy.data.worlds[0]
+    
+    # Verify world uses nodes
+    if not world.use_nodes:
+        print("Error: World does not use nodes!")
+        return False
+    
+    nodes = world.node_tree.nodes
+    
+    # Find clampat node
+    clampat_node = None
+    for node in nodes:
+        if node.label == "ClampAt":
+            clampat_node = node
+            break
+    
+    if not clampat_node:
+        print("Error: ClampAt node not found in the world node tree!")
+        return False
+    
+    # Set the value
+    try:
+        # Check if it's a Value node
+        if clampat_node.type == 'VALUE':
+            # Set the value
+            clampat_node.outputs[0].default_value = clamp_value
+            print(f"Successfully set clampat value to: {clamp_value}")
+            return True
+        else:
+            print(f"Error: clampat node is not a Value node, it's a {clampat_node.type} node")
+            return False
+        
+    except Exception as e:
+        print(f"Error setting clampat value: {e}")
+        return False
+
 def create_bake_image(name, output_dir, mip_level=0):
     """Create a new image for baking with specified mip level."""
     base_size = 512
@@ -246,6 +338,44 @@ def bake_cubemap():
 
 if __name__ == "__main__":
     try:
+        # Get command line arguments passed after "--"
+        argv = sys.argv
+        
+        # Find the index of the script
+        script_index = argv.index("bake_cubemap.py")
+        
+        # Find the "--" separator
+        try:
+            separator_index = argv.index("--", script_index)
+            # Get arguments after "--"
+            args = argv[separator_index + 1:]
+            
+            # Parse texture path (first argument)
+            if len(args) > 0:
+                texture_path = args[0]
+                print(f"Setting environment texture: {texture_path}")
+                
+                # Set the environment texture
+                if not set_environment_texture(texture_path):
+                    print("Failed to set environment texture, continuing with default")
+            else:
+                print("No environment texture path provided, using default")
+                
+            # Parse clampat value (second argument)
+            if len(args) > 1:
+                try:
+                    clampat_value = float(args[1])
+                    print(f"Setting clampat value: {clampat_value}")
+                    
+                    # Set the clampat value
+                    if not set_clampat_value(clampat_value):
+                        print("Failed to set clampat value, continuing with default")
+                except ValueError:
+                    print(f"Invalid clampat value: {args[1]}, must be a number")
+            
+        except ValueError:
+            print("No command line arguments provided, using default settings")
+        
         if not bake_cubemap():
             print("Baking failed!")
             sys.exit(1)

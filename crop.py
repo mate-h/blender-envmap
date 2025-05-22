@@ -165,7 +165,7 @@ async def process_roughness_level(roughness_index, output_subdir=None, progress=
     
     return success
 
-async def process_diffuse_cubemap(progress=None):
+async def process_diffuse_cubemap(progress=None, task_id=None, external_progress=False):
     """Process the diffuse cubemap into its own folder with specified face size."""
     input_file = "output/cubemap_diffuse.hdr"
     
@@ -184,10 +184,13 @@ async def process_diffuse_cubemap(progress=None):
         console.print(f"[bold red]Input file not found: {input_file}[/bold red]")
         return False
     
-    # Create task ID for diffuse if we have a progress bar
+    # Create task ID for diffuse if we have a progress bar and not using external progress
     diffuse_task_id = None
-    if progress:
+    if progress and not external_progress:
         diffuse_task_id = progress.add_task("[green]Diffuse cubemap", total=6)
+    elif progress and external_progress and task_id is not None:
+        # Update external progress if provided
+        progress.update(task_id, description="[cyan]Cropping diffuse cubemap")
     
     # Define face positions for extraction (same layout as specular maps)
     faces = [
@@ -210,9 +213,12 @@ async def process_diffuse_cubemap(progress=None):
     # Wait for all face extractions to complete
     face_results = await asyncio.gather(*face_tasks)
     
-    # Update progress bar if provided
-    if progress and diffuse_task_id is not None:
+    # Update progress bar if provided and not using external progress
+    if progress and diffuse_task_id is not None and not external_progress:
         progress.update(diffuse_task_id, completed=6)
+    elif progress and external_progress and task_id is not None:
+        # Update external progress if provided
+        progress.update(task_id, advance=1/11)  # Advance by 1/11th of total
     
     # Check if all faces were extracted successfully
     if not all(face_results):
@@ -220,39 +226,82 @@ async def process_diffuse_cubemap(progress=None):
     
     return success
 
-async def main():
-    """Process all mip levels in parallel."""
+async def process_mip_levels(external_progress=None, external_task_id=None):
+    """Process all mip levels in parallel.
+    
+    Args:
+        external_progress: Optional external Progress instance
+        external_task_id: Optional task ID in the external progress
+    """
     # Create output directory if it doesn't exist
     if not os.path.exists(OUTPUT_DIR):
         os.makedirs(OUTPUT_DIR, exist_ok=True)
     
-    # Create a rich progress display with custom formatting
-    with Progress(
+    # Determine if we're using external progress or creating our own
+    using_external_progress = external_progress is not None and external_task_id is not None
+    
+    # Create a rich progress display with custom formatting if not using external progress
+    progress_context = external_progress if using_external_progress else Progress(
         TextColumn("[bold blue]{task.description}"),
         BarColumn(),
         TaskProgressColumn(),
         TimeElapsedColumn(),
         TimeRemainingColumn(),
         console=console
-    ) as progress:
-        # Add a task for processing all mip levels
-        mip_task_id = progress.add_task("[magenta]Processing mip levels", total=len(MIP_LEVELS))
+    )
+    
+    # Use a context manager only if we're creating our own progress bar
+    if not using_external_progress:
+        progress_context = progress_context.__enter__()
+    
+    try:
+        # If using external progress, update its description
+        if using_external_progress:
+            external_progress.update(external_task_id, description="[cyan]Cropping mip levels")
         
-        # Create tasks for all mip levels and diffuse map
+        # Add a task for processing all mip levels if not using external progress
+        mip_task_id = None
+        if not using_external_progress:
+            mip_task_id = progress_context.add_task("[magenta]Processing mip levels", total=len(MIP_LEVELS))
+        
+        # Create tasks for all mip levels
         tasks = []
-        for mip_level in MIP_LEVELS:
+        for i, mip_level in enumerate(MIP_LEVELS):
             mip_dir = f"mip{mip_level}"
-            tasks.append(process_roughness_level(mip_level, mip_dir, progress, mip_task_id))
+            # Pass the progress if not using external progress
+            if not using_external_progress:
+                tasks.append(process_roughness_level(mip_level, mip_dir, progress_context, mip_task_id))
+            else:
+                # Process without nested progress bars
+                tasks.append(process_roughness_level(mip_level, mip_dir))
+                # Update external progress after each mip level
+                if i > 0:  # Only update after first mip level to avoid jumping too fast
+                    external_progress.update(external_task_id, advance=1/11)  # Advance by 1/11th of total
         
         # Process diffuse map
-        diffuse_task = process_diffuse_cubemap(progress)
+        if using_external_progress:
+            diffuse_task = process_diffuse_cubemap(external_progress, external_task_id, True)
+        else:
+            diffuse_task = process_diffuse_cubemap(progress_context)
         tasks.append(diffuse_task)
         
         # Wait for all tasks to complete
-        await asyncio.gather(*tasks)
-    
-    console.print("[bold green]Cubemap extraction complete![/bold green]")
+        results = await asyncio.gather(*tasks)
+        
+        # Update external progress to complete if using it
+        if using_external_progress:
+            external_progress.update(external_task_id, advance=1/11, description="[cyan]Cropping complete")
+        
+        console.print("[bold green]Cubemap extraction complete![/bold green]")
+        
+        # Return True if all tasks succeeded
+        return all(results)
+        
+    finally:
+        # Exit the context manager if we created our own progress bar
+        if not using_external_progress:
+            progress_context.__exit__(None, None, None)
 
 if __name__ == "__main__":
-    # Run the async main function
-    asyncio.run(main()) 
+    # Run the async main function without external progress
+    asyncio.run(process_mip_levels()) 

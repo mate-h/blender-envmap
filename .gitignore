@@ -1,5 +1,7 @@
 output
+__pycache__
 assets/*.ktx2
 node_modules
 out
 exr-preview*.vsix
+*.blend1
