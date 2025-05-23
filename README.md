@@ -23,9 +23,9 @@ A command-line tool that generates KTX2 environment maps for the Bevy game engin
 
 ## Usage
 
-Generate environment maps by running:
+Generate environment maps by running (example showing the default values):
 ```bash
-./main.sh assets/ballawley_park_2k.exr
+blender-envmap --clamp 1.0 --name cubemap --output assets assets/spiaggia_di_mondello_2k.exr
 ```
 
-The generated files will be saved in the assets directory, using the input filename with specular and diffuse suffixes.
+The generated files will be saved in the output directory, using the name argument with specular and diffuse suffixes.
