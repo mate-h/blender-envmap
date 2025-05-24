@@ -8,8 +8,8 @@ complete -c blender-envmap -f -d "Blender Environment Map Baker"
 # Positional argument for environment map
 complete -c blender-envmap -n "__fish_is_first_arg" -k -f -a "(__fish_complete_suffix .hdr; __fish_complete_suffix .exr)" -d "Environment map (HDR/EXR file)"
 
-# Option for clampat value
-complete -c blender-envmap -l clamp -r -d "Value for the clamp node in world shader" 
+# Option for white point value
+complete -c blender-envmap -l white-point -r -d "Value for the white point node in world shader" 
 
 # Option for output directory
 complete -c blender-envmap -l output -r -F -d "Output directory for KTX files" 

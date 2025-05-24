@@ -100,7 +100,7 @@ def main():
     parser.add_argument("environment_map", help="Path to the environment map HDR file")
     
     # Optional arguments
-    parser.add_argument("--clamp", type=float, help="Value for the clamp node in the world shader")
+    parser.add_argument("--white-point", type=float, help="Value for the white point node in the world shader")
     parser.add_argument("--output", default="assets", help="Output directory for KTX files")
     parser.add_argument("--name", default="cubemap", help="Base name for output KTX files")
     parser.add_argument("--blend-file", default="eq2cube.blend", help="Path to Blender file")
@@ -121,8 +121,8 @@ def main():
     settings.add_row("Base Name", args.name)
     settings.add_row("Blend File", args.blend_file)
     
-    if args.clamp is not None:
-        settings.add_row("Clamp Value", str(args.clamp))
+    if args.white_point is not None:
+        settings.add_row("White Point Value", str(args.white_point))
     
     console.print(settings)
     
@@ -156,8 +156,8 @@ def main():
         blender_cmd = ["blender", "-b", args.blend_file, "--python", "bake_cubemap.py", "--"]
         blender_cmd.append(args.environment_map)
         
-        if args.clamp is not None:
-            blender_cmd.append(str(args.clamp))
+        if args.white_point is not None:
+            blender_cmd.append(str(args.white_point))
         
         # Run blender command with progress tracking
         if not run_command(blender_cmd, "Baking cubemap", progress, task1, parse_mip=True):
@@ -176,7 +176,9 @@ def main():
         
         # Direct call to process_mip_levels with our progress bar
         try:
-            result = asyncio.run(process_mip_levels(progress, task2))
+            # Pass the white_point value to process_mip_levels
+            result = asyncio.run(process_mip_levels(progress, task2, 
+                                                    white_point=args.white_point))
             if not result:
                 console.print("[bold red]Error in cubemap cropping process[/bold red]")
                 return 1

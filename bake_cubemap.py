@@ -65,8 +65,8 @@ def set_environment_texture(texture_path):
         print(f"Error setting environment texture: {e}")
         return False
 
-def set_clampat_value(clamp_value):
-    """Set the value of the clampat node in the world shader."""
+def set_white_point(white_point_value):
+    """Set the value of the white point node in the world shader."""
     # Make sure we have a world
     if not bpy.data.worlds:
         print("Error: No world found in the scene!")
@@ -81,31 +81,31 @@ def set_clampat_value(clamp_value):
     
     nodes = world.node_tree.nodes
     
-    # Find clampat node
-    clampat_node = None
+    # Find white point node
+    white_point_node = None
     for node in nodes:
-        if node.label == "ClampAt":
-            clampat_node = node
+        if node.label == "WhitePoint":
+            white_point_node = node
             break
     
-    if not clampat_node:
-        print("Error: ClampAt node not found in the world node tree!")
+    if not white_point_node:
+        print("Error: WhitePoint node not found in the world node tree!")
         return False
     
     # Set the value
     try:
         # Check if it's a Value node
-        if clampat_node.type == 'VALUE':
+        if white_point_node.type == 'VALUE':
             # Set the value
-            clampat_node.outputs[0].default_value = clamp_value
-            print(f"Successfully set clampat value to: {clamp_value}")
+            white_point_node.outputs[0].default_value = white_point_value
+            print(f"Successfully set white point value to: {white_point_value}")
             return True
         else:
-            print(f"Error: clampat node is not a Value node, it's a {clampat_node.type} node")
+            print(f"Error: white point node is not a Value node, it's a {white_point_node.type} node")
             return False
         
     except Exception as e:
-        print(f"Error setting clampat value: {e}")
+        print(f"Error setting white point value: {e}")
         return False
 
 def create_bake_image(name, output_dir, mip_level=0):
@@ -361,17 +361,17 @@ if __name__ == "__main__":
             else:
                 print("No environment texture path provided, using default")
                 
-            # Parse clampat value (second argument)
+            # Parse white point value (second argument)
             if len(args) > 1:
                 try:
-                    clampat_value = float(args[1])
-                    print(f"Setting clampat value: {clampat_value}")
+                    white_point_value = float(args[1])
+                    print(f"Setting white point value: {white_point_value}")
                     
-                    # Set the clampat value
-                    if not set_clampat_value(clampat_value):
-                        print("Failed to set clampat value, continuing with default")
+                    # Set the white point value
+                    if not set_white_point(white_point_value):
+                        print("Failed to set white point value, continuing with default")
                 except ValueError:
-                    print(f"Invalid clampat value: {args[1]}, must be a number")
+                    print(f"Invalid white point value: {args[1]}, must be a number")
             
         except ValueError:
             print("No command line arguments provided, using default settings")

@@ -17,18 +17,33 @@ MIP_LEVELS = list(range(10))
 # Set up rich console
 console = Console()
 
-async def extract_cubemap_face(input_path, output_path, x, y, size):
+async def extract_cubemap_face(input_path, output_path, x, y, size, white_point=None):
     """Extract a face from the cubemap image using oiiotool."""
     try:
-        # Create the oiiotool command with proper cropping
-        # Using --cut instead of --crop to extract the region without black areas
-        # Adjust the end coordinates to ensure exact size (end coordinate is exclusive)
+        # Create the oiiotool command with proper cropping and tone mapping
         cmd = [
             "oiiotool",
             input_path,
-            "--cut", f"{x},{y},{x+size-1},{y+size-1}",  # Subtract 1 from end coordinates to get exact size
-            "-o", output_path
+            # Cut the region we want
+            "--cut", f"{x},{y},{x+size-1},{y+size-1}"  # Subtract 1 from end coordinates to get exact size
         ]
+        
+        # If white point is provided, apply the reverse tonemapping formula using:
+        # --dup --invert --div --mulc (white_point)
+        if white_point is not None and white_point > 0:
+            cmd.extend([
+                # Duplicate the image on the stack
+                "--dup",
+                # Invert the colors (1-color)
+                "--invert",
+                # Divide original by inverted
+                "--div",
+                # Multiply by white point
+                "--mulc", str(white_point)
+            ])
+        
+        # Add output filename to command
+        cmd.extend(["-o", output_path])
         
         # Run the command asynchronously
         process = await asyncio.create_subprocess_exec(
@@ -41,10 +56,11 @@ async def extract_cubemap_face(input_path, output_path, x, y, size):
         
         if process.returncode != 0:
             console.print(f"[bold red]Error processing {input_path}: {stderr.decode()}[/bold red]")
+            if stderr:
+                console.print(f"[bold red]Error details: {stderr.decode()}[/bold red]")
             return False
             
-        # Verify the output image dimensions (run synchronously)
-        loop = asyncio.get_event_loop()
+        # Verify the output image dimensions
         verify_cmd = ["oiiotool", "--info", "-v", output_path]
         
         verify_process = await asyncio.create_subprocess_exec(
@@ -58,8 +74,6 @@ async def extract_cubemap_face(input_path, output_path, x, y, size):
         
         # Check if the size is correct
         if f"{size} x {size}" not in info_output:
-            # console.print(f"[yellow]Warning: Output image may not be exactly {size}x{size}[/yellow]")
-            
             # Try to resize to exact size if needed
             resize_cmd = [
                 "oiiotool",
@@ -82,7 +96,7 @@ async def extract_cubemap_face(input_path, output_path, x, y, size):
         console.print(f"[bold red]Exception processing {input_path}: {e}[/bold red]")
         return False
 
-async def process_roughness_level(roughness_index, output_subdir=None, progress=None, task_id=None):
+async def process_roughness_level(roughness_index, output_subdir=None, progress=None, task_id=None, white_point=None):
     """Process a specific mip level."""
     # Use mip level for filenames instead of roughness values
     mip_level = roughness_index
@@ -146,7 +160,7 @@ async def process_roughness_level(roughness_index, output_subdir=None, progress=
         output_path = os.path.join(target_dir, final_output_file)
         
         # Create a task for this face extraction
-        face_tasks.append(extract_cubemap_face(input_file, output_path, x, y, size))
+        face_tasks.append(extract_cubemap_face(input_file, output_path, x, y, size, white_point))
     
     # Wait for all face extractions to complete
     face_results = await asyncio.gather(*face_tasks)
@@ -165,7 +179,7 @@ async def process_roughness_level(roughness_index, output_subdir=None, progress=
     
     return success
 
-async def process_diffuse_cubemap(progress=None, task_id=None, external_progress=False):
+async def process_diffuse_cubemap(progress=None, task_id=None, external_progress=False, white_point=None):
     """Process the diffuse cubemap into its own folder with specified face size."""
     input_file = "output/cubemap_diffuse.hdr"
     
@@ -208,7 +222,7 @@ async def process_diffuse_cubemap(progress=None, task_id=None, external_progress
     # Process all faces in parallel
     for output_file, x, y in faces:
         output_path = os.path.join(diffuse_dir, output_file)
-        face_tasks.append(extract_cubemap_face(input_file, output_path, x, y, size))
+        face_tasks.append(extract_cubemap_face(input_file, output_path, x, y, size, white_point))
     
     # Wait for all face extractions to complete
     face_results = await asyncio.gather(*face_tasks)
@@ -226,12 +240,13 @@ async def process_diffuse_cubemap(progress=None, task_id=None, external_progress
     
     return success
 
-async def process_mip_levels(external_progress=None, external_task_id=None):
+async def process_mip_levels(external_progress=None, external_task_id=None, white_point=None):
     """Process all mip levels in parallel.
     
     Args:
         external_progress: Optional external Progress instance
         external_task_id: Optional task ID in the external progress
+        white_point: Optional white point value for reverse tone mapping
     """
     # Create output directory if it doesn't exist
     if not os.path.exists(OUTPUT_DIR):
@@ -270,19 +285,19 @@ async def process_mip_levels(external_progress=None, external_task_id=None):
             mip_dir = f"mip{mip_level}"
             # Pass the progress if not using external progress
             if not using_external_progress:
-                tasks.append(process_roughness_level(mip_level, mip_dir, progress_context, mip_task_id))
+                tasks.append(process_roughness_level(mip_level, mip_dir, progress_context, mip_task_id, white_point))
             else:
                 # Process without nested progress bars
-                tasks.append(process_roughness_level(mip_level, mip_dir))
+                tasks.append(process_roughness_level(mip_level, mip_dir, white_point=white_point))
                 # Update external progress after each mip level
                 if i > 0:  # Only update after first mip level to avoid jumping too fast
                     external_progress.update(external_task_id, advance=1/11)  # Advance by 1/11th of total
         
         # Process diffuse map
         if using_external_progress:
-            diffuse_task = process_diffuse_cubemap(external_progress, external_task_id, True)
+            diffuse_task = process_diffuse_cubemap(external_progress, external_task_id, True, white_point)
         else:
-            diffuse_task = process_diffuse_cubemap(progress_context)
+            diffuse_task = process_diffuse_cubemap(progress_context, white_point=white_point)
         tasks.append(diffuse_task)
         
         # Wait for all tasks to complete
@@ -303,5 +318,15 @@ async def process_mip_levels(external_progress=None, external_task_id=None):
             progress_context.__exit__(None, None, None)
 
 if __name__ == "__main__":
+    # Check if white point is provided as command line argument
+    import sys
+    white_point_value = None
+    if len(sys.argv) > 1:
+        try:
+            white_point_value = float(sys.argv[1])
+            console.print(f"[cyan]Using white point value: {white_point_value}[/cyan]")
+        except ValueError:
+            console.print("[bold red]Invalid white point value, must be a number[/bold red]")
+    
     # Run the async main function without external progress
-    asyncio.run(process_mip_levels()) 
+    asyncio.run(process_mip_levels(white_point=white_point_value)) 
