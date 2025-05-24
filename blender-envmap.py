@@ -93,6 +93,7 @@ def run_command(cmd, description, progress=None, task_id=None, parse_mip=False):
 def main():
     """Main function to process command line arguments and run the environment map baking."""
     parser = argparse.ArgumentParser(
+        prog="blender-envmap",
         description="Blender Environment Map Baker - Create PBR cubemaps from equirectangular HDR images"
     )
     
