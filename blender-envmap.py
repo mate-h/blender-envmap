@@ -57,10 +57,8 @@ def run_command(cmd, description, progress=None, task_id=None, parse_mip=False):
                 # Strip the line
                 line = line.strip()
                 
-                # Don't print every line from Blender - it's too verbose
-                # Only print important messages like errors
-                if "Error" in line or "Exception" in line:
-                    console.print(f"[bold red]{line}[/bold red]")
+                # Print all Blender output to stdout
+                print(line)
                 
                 # Check for mip level updates
                 mip_match = mip_pattern.search(line)
@@ -80,10 +78,10 @@ def run_command(cmd, description, progress=None, task_id=None, parse_mip=False):
             process.wait()
             return process.returncode == 0
         else:
-            # Regular execution without parsing
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            # Run without capturing output to allow it to go to stdout
+            result = subprocess.run(cmd)
             if result.returncode != 0:
-                console.print(f"[bold red]Error:[/bold red] {result.stderr}")
+                console.print(f"[bold red]Error:[/bold red] Command failed with return code {result.returncode}")
                 return False
             return True
     except Exception as e:
