@@ -7,12 +7,10 @@ import asyncio
 from rich.console import Console
 from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, TimeElapsedColumn, TimeRemainingColumn
 from concurrent.futures import ThreadPoolExecutor
+from config import MIP_LEVELS, CUBEMAP_FACES, CUBEMAP_CONFIGS, FILE_PATTERNS, OUTPUT_DIRS, BASE_RESOLUTION
 
 # Output directory
-OUTPUT_DIR = "output/cropped"
-
-# Define mip levels (0-9)
-MIP_LEVELS = list(range(10))
+OUTPUT_DIR = OUTPUT_DIRS["cropped"]
 
 # Set up rich console
 console = Console()
@@ -112,11 +110,10 @@ async def process_roughness_level(roughness_index, output_subdir=None, progress=
     """Process a specific mip level."""
     # Use mip level for filenames instead of roughness values
     mip_level = roughness_index
-    input_file = f"output/cubemap_mip{mip_level}.hdr"
+    input_file = FILE_PATTERNS["mip_input"].format(level=mip_level)
     
     # Calculate face size based on mip level
-    base_size = 512
-    size = base_size // (2 ** mip_level)
+    size = BASE_RESOLUTION // (2 ** mip_level)
     
     # Define the target directory
     target_dir = OUTPUT_DIR
@@ -141,15 +138,8 @@ async def process_roughness_level(roughness_index, output_subdir=None, progress=
     
     stdout, stderr = await process.communicate()
     
-    # Define face positions for extraction
-    faces = [
-        ("0001.exr", size*3, size),    # BACK
-        ("0002.exr", size, size),      # FRONT
-        ("0003.exr", size*2, 0),       # TOP
-        ("0004.exr", size*2, size*2),  # BOTTOM
-        ("0005.exr", size*2, size),    # RIGHT
-        ("0006.exr", 0, size),         # LEFT
-    ]
+    # Calculate face positions using the shared constant
+    faces = [(filename, x * size, y * size) for filename, x, y in CUBEMAP_FACES]
     
     success = True
     face_tasks = []
@@ -191,60 +181,69 @@ async def process_roughness_level(roughness_index, output_subdir=None, progress=
     
     return success
 
-async def process_diffuse_cubemap(progress=None, task_id=None, external_progress=False, white_point=None):
-    """Process the diffuse cubemap into its own folder with specified face size."""
-    input_file = "output/cubemap_diffuse.hdr"
+async def process_cubemap_type(cubemap_type, progress=None, task_id=None, external_progress=False, white_point=None):
+    """Process a specific type of cubemap into its own folder.
     
-    # Fixed size for diffuse cubemap (512x512 per face)
-    size = 32
+    Args:
+        cubemap_type: Type of cubemap ('diffuse' or 'skybox')
+        progress: Optional progress bar instance
+        task_id: Optional task ID for the progress bar
+        external_progress: Whether using external progress tracking
+        white_point: Optional white point value for reverse tone mapping
+        
+    Returns:
+        bool: Success status
+    """
+    # Configure based on cubemap type
+    if cubemap_type not in CUBEMAP_CONFIGS:
+        raise ValueError(f"Unknown cubemap type: {cubemap_type}")
     
-    # Define diffuse target directory
-    diffuse_dir = os.path.join(OUTPUT_DIR, "diffuse")
+    config = CUBEMAP_CONFIGS[cubemap_type]
     
-    # Create diffuse directory if it doesn't exist
-    if not os.path.exists(diffuse_dir):
-        os.makedirs(diffuse_dir, exist_ok=True)
+    input_file = FILE_PATTERNS[f"{cubemap_type}_input"]
+    size = config["size"]
+    target_dir = OUTPUT_DIRS[cubemap_type]
+    progress_color = config["progress_color"]
+    progress_fraction = config["progress_fraction"]
+    apply_white_point = white_point if config["apply_white_point"] else None
+    
+    # Create target directory if it doesn't exist
+    if not os.path.exists(target_dir):
+        os.makedirs(target_dir, exist_ok=True)
     
     # Check if input file exists
     if not os.path.exists(input_file):
         console.print(f"[bold red]Input file not found: {input_file}[/bold red]")
         return False
     
-    # Create task ID for diffuse if we have a progress bar and not using external progress
-    diffuse_task_id = None
+    # Create task ID if we have a progress bar and not using external progress
+    local_task_id = None
     if progress and not external_progress:
-        diffuse_task_id = progress.add_task("[green]Diffuse cubemap", total=6)
+        local_task_id = progress.add_task(f"{progress_color}{cubemap_type.title()} cubemap", total=6)
     elif progress and external_progress and task_id is not None:
         # Update external progress if provided
-        progress.update(task_id, description="[cyan]Cropping diffuse cubemap")
+        progress.update(task_id, description=f"[cyan]Cropping {cubemap_type} cubemap")
     
-    # Define face positions for extraction (same layout as specular maps)
-    faces = [
-        ("0001.exr", size*3, size),    # BACK
-        ("0002.exr", size, size),      # FRONT
-        ("0003.exr", size*2, 0),       # TOP
-        ("0004.exr", size*2, size*2),  # BOTTOM
-        ("0005.exr", size*2, size),    # RIGHT
-        ("0006.exr", 0, size),         # LEFT
-    ]
+    # Calculate face positions
+    faces = [(filename, x * size, y * size) for filename, x, y in CUBEMAP_FACES]
     
     success = True
     face_tasks = []
     
     # Process all faces in parallel
     for output_file, x, y in faces:
-        output_path = os.path.join(diffuse_dir, output_file)
-        face_tasks.append(extract_cubemap_face(input_file, output_path, x, y, size, white_point))
+        output_path = os.path.join(target_dir, output_file)
+        face_tasks.append(extract_cubemap_face(input_file, output_path, x, y, size, apply_white_point))
     
     # Wait for all face extractions to complete
     face_results = await asyncio.gather(*face_tasks)
     
     # Update progress bar if provided and not using external progress
-    if progress and diffuse_task_id is not None and not external_progress:
-        progress.update(diffuse_task_id, completed=6)
+    if progress and local_task_id is not None and not external_progress:
+        progress.update(local_task_id, completed=6)
     elif progress and external_progress and task_id is not None:
         # Update external progress if provided
-        progress.update(task_id, advance=1/11)  # Advance by 1/11th of total
+        progress.update(task_id, advance=progress_fraction)
     
     # Check if all faces were extracted successfully
     if not all(face_results):
@@ -252,67 +251,13 @@ async def process_diffuse_cubemap(progress=None, task_id=None, external_progress
     
     return success
 
+async def process_diffuse_cubemap(progress=None, task_id=None, external_progress=False, white_point=None):
+    """Process the diffuse cubemap into its own folder with specified face size."""
+    return await process_cubemap_type("diffuse", progress, task_id, external_progress, white_point)
+
 async def process_skybox_cubemap(progress=None, task_id=None, external_progress=False, white_point=None):
     """Process the skybox cubemap into its own folder with full resolution."""
-    input_file = "output/cubemap_skybox.hdr"
-    
-    # Full size for skybox cubemap (512x512 per face)
-    size = 512
-    
-    # Define skybox target directory
-    skybox_dir = os.path.join(OUTPUT_DIR, "skybox")
-    
-    # Create skybox directory if it doesn't exist
-    if not os.path.exists(skybox_dir):
-        os.makedirs(skybox_dir, exist_ok=True)
-    
-    # Check if input file exists
-    if not os.path.exists(input_file):
-        console.print(f"[bold red]Input file not found: {input_file}[/bold red]")
-        return False
-    
-    # Create task ID for skybox if we have a progress bar and not using external progress
-    skybox_task_id = None
-    if progress and not external_progress:
-        skybox_task_id = progress.add_task("[blue]Skybox cubemap", total=6)
-    elif progress and external_progress and task_id is not None:
-        # Update external progress if provided
-        progress.update(task_id, description="[cyan]Cropping skybox cubemap")
-    
-    # Define face positions for extraction (same layout as specular maps)
-    faces = [
-        ("0001.exr", size*3, size),    # BACK
-        ("0002.exr", size, size),      # FRONT
-        ("0003.exr", size*2, 0),       # TOP
-        ("0004.exr", size*2, size*2),  # BOTTOM
-        ("0005.exr", size*2, size),    # RIGHT
-        ("0006.exr", 0, size),         # LEFT
-    ]
-    
-    success = True
-    face_tasks = []
-    
-    # Process all faces in parallel
-    for output_file, x, y in faces:
-        output_path = os.path.join(skybox_dir, output_file)
-        # Note: For skybox, we don't apply white point correction since we want raw HDR values
-        face_tasks.append(extract_cubemap_face(input_file, output_path, x, y, size, None))
-    
-    # Wait for all face extractions to complete
-    face_results = await asyncio.gather(*face_tasks)
-    
-    # Update progress bar if provided and not using external progress
-    if progress and skybox_task_id is not None and not external_progress:
-        progress.update(skybox_task_id, completed=6)
-    elif progress and external_progress and task_id is not None:
-        # Update external progress if provided
-        progress.update(task_id, advance=1/12)  # Advance by 1/12th of total for skybox
-    
-    # Check if all faces were extracted successfully
-    if not all(face_results):
-        success = False
-    
-    return success
+    return await process_cubemap_type("skybox", progress, task_id, external_progress, white_point)
 
 async def process_mip_levels(external_progress=None, external_task_id=None, white_point=None):
     """Process all mip levels in parallel.

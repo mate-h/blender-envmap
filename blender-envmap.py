@@ -121,6 +121,13 @@ def main():
     skybox_group.add_argument("--skybox", action="store_true", default=True, help="Create a skybox KTX file (default)")
     skybox_group.add_argument("--no-skybox", action="store_true", help="Disable skybox creation")
     
+    # Mip level 9 control (mutually exclusive)
+    last_mip_group = parser.add_mutually_exclusive_group()
+    last_mip_group.add_argument("--skip-last-mip", action="store_true", default=True, 
+                           help="Skip last mip level (1x1 per face) in specular KTX (default)")
+    last_mip_group.add_argument("--include-last-mip", action="store_true", 
+                           help="Include last mip level (1x1 per face) in specular KTX")
+    
     args = parser.parse_args()
     
     # Handle tonemap logic
@@ -128,6 +135,9 @@ def main():
     
     # Handle skybox logic
     should_create_skybox = args.skybox and not args.no_skybox
+    
+    # Handle mip9 logic
+    should_skip_last_mip = not args.include_last_mip  # Skip by default unless --include-last-mip is specified
     
     # If name is not provided, use the input file name without path or extension
     if args.name is None:
@@ -149,6 +159,7 @@ def main():
     settings.add_row("Blend File", args.blend_file)
     settings.add_row("Tonemapping", "Enabled" if should_tonemap else "Disabled")
     settings.add_row("Skybox", "Enabled" if should_create_skybox else "Disabled")
+    settings.add_row("Last Mip Level", "Skipped" if should_skip_last_mip else "Included")
     
     if args.white_point is not None:
         settings.add_row("White Point Value", str(args.white_point))
@@ -238,6 +249,7 @@ def main():
                 output_name=args.name, 
                 output_dir=args.output,
                 create_skybox=should_create_skybox,
+                skip_last_mip=should_skip_last_mip,
                 progress=progress,
                 task_id=task3
             )

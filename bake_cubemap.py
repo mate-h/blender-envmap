@@ -2,6 +2,13 @@ import bpy
 import os
 import sys
 
+# Add the current directory to Python path so we can import config
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
+
+from config import BASE_RESOLUTION, CUBEMAP_CONFIGS
+
 def setup_output_directory():
     """Create and return the output directory path."""
     output_dir = os.path.join(os.getcwd(), "output")
@@ -166,8 +173,7 @@ def set_tonemap(should_tonemap):
 
 def create_bake_image(name, output_dir, mip_level=0):
     """Create a new image for baking with specified mip level."""
-    base_size = 512
-    resolution = max(1, base_size // (2 ** mip_level))  # Ensure minimum size is 8x8
+    resolution = max(1, BASE_RESOLUTION // (2 ** mip_level))  # Ensure minimum size is 8x8
     
     # Create new image with standard 1:1 aspect ratio first
     image = bpy.data.images.new(name=name, width=resolution*4, height=resolution*3, float_buffer=True)
@@ -297,6 +303,57 @@ def bake_single_cubemap(cube_probe, image, mip_level, output_dir):
         print(f"Error during baking: {e}")
         return False
 
+def bake_and_save_cubemap(cube_probe, image_name, output_dir, mip_level, roughness, resolution=None):
+    """Bake and save a single cubemap with specified parameters.
+    
+    Args:
+        cube_probe: The cube probe object to bake
+        image_name: Name for the output image
+        output_dir: Directory to save the image
+        mip_level: Mip level for image creation
+        roughness: Material roughness value
+        resolution: Optional resolution override
+        
+    Returns:
+        bool: Success status
+    """
+    # Create image for this baking operation
+    image = create_bake_image(image_name, output_dir, mip_level)
+    
+    # Adjust material roughness
+    adjust_material_roughness("BakeMaterial", roughness)
+    
+    # Setup render settings
+    if resolution is not None:
+        setup_render_settings(resolution)
+    else:
+        calc_resolution = max(8, BASE_RESOLUTION // (2 ** mip_level))
+        setup_render_settings(calc_resolution)
+    
+    # Bake the cubemap
+    success = False
+    try:
+        success = bake_single_cubemap(cube_probe, image, mip_level, output_dir)
+    except Exception as e:
+        print(f"Exception during baking for {image_name}: {e}")
+    
+    if not success:
+        print(f"Baking failed for {image_name}")
+        # Clean up the failed image
+        try:
+            bpy.data.images.remove(image)
+        except:
+            pass
+        return False
+    
+    # Clean up the image after saving
+    try:
+        bpy.data.images.remove(image)
+    except Exception as e:
+        print(f"Warning: Failed to clean up image {image_name}: {e}")
+    
+    return True
+
 def bake_cubemap(should_render_skybox=False, original_tonemap_setting=None):
     """Main function to bake the cubemap with multiple roughness levels."""
     try:
@@ -315,76 +372,18 @@ def bake_cubemap(should_render_skybox=False, original_tonemap_setting=None):
             
             # Create new image for this roughness level - use mip level in name instead of roughness
             image_name = f"cubemap_mip{mip_level}"
-            image = create_bake_image(image_name, output_dir, mip_level)
-            
-            # Adjust material roughness
-            adjust_material_roughness("BakeMaterial", roughness)
             
             # Bake the cubemap for this roughness level
-            success = False
-            try:
-                success = bake_single_cubemap(cube_probe, image, mip_level, output_dir)
-            except Exception as e:
-                print(f"Exception during baking for mip{mip_level} (roughness {roughness:.2f}): {e}")
-            
-            if not success:
-                print(f"Baking failed for mip{mip_level} (roughness {roughness:.2f})")
+            if not bake_and_save_cubemap(cube_probe, image_name, output_dir, mip_level, roughness):
                 # Continue with next roughness level instead of failing completely
-                # Clean up the failed image
-                try:
-                    bpy.data.images.remove(image)
-                except:
-                    pass
                 continue
-            
-            # Clean up the image after saving
-            try:
-                bpy.data.images.remove(image)
-            except Exception as e:
-                print(f"Warning: Failed to clean up image: {e}")
         
         # Create diffuse image with fixed 32x32 per face dimensions
         diffuse_image_name = "cubemap_diffuse"
         
-        # Calculate the total cubemap layout size for 32x32 faces (mip 4)
-        diffuse_image = create_bake_image(diffuse_image_name, output_dir, 4)
-        
-        # Set material to maximum roughness
-        adjust_material_roughness("BakeMaterial", 1.0)
-        
-        # Setup render settings specifically for 32x32 diffuse map
-        setup_render_settings(32)
-        
-        # Bake the diffuse cubemap
-        success = False
-        try:
-            # Select the cube probe
-            select_object(cube_probe)
-            
-            # Set up the image texture node for baking
-            if not setup_image_texture_node(cube_probe, diffuse_image):
-                print(f"Error: Failed to set up image texture node for diffuse map")
-            else:
-                bpy.ops.object.bake(type='COMBINED', use_selected_to_active=False)
-                diffuse_image.file_format = 'HDR'
-                diffuse_image.save_render(filepath=os.path.join(output_dir, f"{diffuse_image_name}.hdr"))
-                success = True
-        except Exception as e:
-            print(f"Exception during baking for diffuse cubemap: {e}")
-        
-        if not success:
-            print(f"Baking failed for diffuse cubemap")
-            # Clean up the failed image
-            try:
-                bpy.data.images.remove(diffuse_image)
-            except:
-                pass
-        else:
-            # Clean up the image after saving
-            try:
-                bpy.data.images.remove(diffuse_image)
-            except Exception as e:
-                print(f"Warning: Failed to clean up image: {e}")
+        # Bake the diffuse cubemap with maximum roughness and 32x32 resolution
+        if not bake_and_save_cubemap(cube_probe, diffuse_image_name, output_dir, 4, 1.0, 32):
+            print("Failed to bake diffuse cubemap")
         
         # Render skybox if requested
         if should_render_skybox:
@@ -396,44 +395,12 @@ def bake_cubemap(should_render_skybox=False, original_tonemap_setting=None):
             
             # Create skybox image with full resolution (mip 0)
             skybox_image_name = "cubemap_skybox"
-            skybox_image = create_bake_image(skybox_image_name, output_dir, 0)
             
-            # Set material to minimum roughness for crisp skybox
-            adjust_material_roughness("BakeMaterial", 0.0)
-            
-            # Setup render settings for full resolution skybox
-            setup_render_settings(512)
-            
-            # Bake the skybox cubemap
-            skybox_success = False
-            try:
-                # Select the cube probe
-                select_object(cube_probe)
-                
-                # Set up the image texture node for baking
-                if not setup_image_texture_node(cube_probe, skybox_image):
-                    print(f"Error: Failed to set up image texture node for skybox")
-                else:
-                    bpy.ops.object.bake(type='COMBINED', use_selected_to_active=False)
-                    skybox_image.file_format = 'HDR'
-                    skybox_image.save_render(filepath=os.path.join(output_dir, f"{skybox_image_name}.hdr"))
-                    skybox_success = True
-            except Exception as e:
-                print(f"Exception during baking for skybox cubemap: {e}")
+            # Bake the skybox cubemap with minimum roughness and full resolution
+            skybox_success = bake_and_save_cubemap(cube_probe, skybox_image_name, output_dir, 0, 0.0, 512)
             
             if not skybox_success:
-                print(f"Baking failed for skybox cubemap")
-                # Clean up the failed image
-                try:
-                    bpy.data.images.remove(skybox_image)
-                except:
-                    pass
-            else:
-                # Clean up the image after saving
-                try:
-                    bpy.data.images.remove(skybox_image)
-                except Exception as e:
-                    print(f"Warning: Failed to clean up skybox image: {e}")
+                print("Failed to bake skybox cubemap")
             
             # Restore original tonemap setting
             if original_tonemap_setting is not None:

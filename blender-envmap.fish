@@ -28,5 +28,9 @@ complete -c blender-envmap -l no-tonemap -f -d "Disable tonemapping"
 complete -c blender-envmap -l skybox -f -d "Create a skybox KTX file (default)"
 complete -c blender-envmap -l no-skybox -f -d "Disable skybox creation"
 
+# Last Mip Level options (mutually exclusive)
+complete -c blender-envmap -l skip-last-mip -f -d "Skip last mip level (1x1 per face) in specular KTX (default)"
+complete -c blender-envmap -l include-last-mip -f -d "Include last mip level (1x1 per face) in specular KTX"
+
 # Help flag
 complete -c blender-envmap -s h -l help -f -d "Show help message and exit" 
