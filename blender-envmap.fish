@@ -20,6 +20,9 @@ complete -c blender-envmap -l name -r -d "Base name for output KTX files"
 # Option for blend file
 complete -c blender-envmap -l blend-file -r -F -a "(__fish_complete_suffix .blend)" -d "Path to Blender file" 
 
+# Option for resolution
+complete -c blender-envmap -l resolution -r -d "Output cubemap face resolution (default: auto-detect from input)"
+
 # Tonemap options (mutually exclusive)
 complete -c blender-envmap -l tonemap -f -d "Enable tonemapping (default)"
 complete -c blender-envmap -l no-tonemap -f -d "Disable tonemapping"

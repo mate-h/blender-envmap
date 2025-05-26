@@ -7,7 +7,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
     sys.path.insert(0, current_dir)
 
-from config import BASE_RESOLUTION, CUBEMAP_CONFIGS
+from config import CUBEMAP_CONFIGS, get_dynamic_mip_levels, get_dynamic_cubemap_configs
 
 def setup_output_directory():
     """Create and return the output directory path."""
@@ -171,9 +171,9 @@ def set_tonemap(should_tonemap):
         print(f"Error setting tonemap factor: {e}")
         return False
 
-def create_bake_image(name, output_dir, mip_level=0):
+def create_bake_image(name, output_dir, mip_level=0, base_resolution=512):
     """Create a new image for baking with specified mip level."""
-    resolution = max(1, BASE_RESOLUTION // (2 ** mip_level))  # Ensure minimum size is 8x8
+    resolution = max(1, base_resolution // (2 ** mip_level))  # Ensure minimum size is 1x1
     
     # Create new image with standard 1:1 aspect ratio first
     image = bpy.data.images.new(name=name, width=resolution*4, height=resolution*3, float_buffer=True)
@@ -303,7 +303,7 @@ def bake_single_cubemap(cube_probe, image, mip_level, output_dir):
         print(f"Error during baking: {e}")
         return False
 
-def bake_and_save_cubemap(cube_probe, image_name, output_dir, mip_level, roughness, resolution=None):
+def bake_and_save_cubemap(cube_probe, image_name, output_dir, mip_level, roughness, resolution=None, base_resolution=512):
     """Bake and save a single cubemap with specified parameters.
     
     Args:
@@ -313,12 +313,13 @@ def bake_and_save_cubemap(cube_probe, image_name, output_dir, mip_level, roughne
         mip_level: Mip level for image creation
         roughness: Material roughness value
         resolution: Optional resolution override
+        base_resolution: Base resolution for calculations
         
     Returns:
         bool: Success status
     """
     # Create image for this baking operation
-    image = create_bake_image(image_name, output_dir, mip_level)
+    image = create_bake_image(image_name, output_dir, mip_level, base_resolution)
     
     # Adjust material roughness
     adjust_material_roughness("BakeMaterial", roughness)
@@ -327,7 +328,7 @@ def bake_and_save_cubemap(cube_probe, image_name, output_dir, mip_level, roughne
     if resolution is not None:
         setup_render_settings(resolution)
     else:
-        calc_resolution = max(8, BASE_RESOLUTION // (2 ** mip_level))
+        calc_resolution = max(8, base_resolution // (2 ** mip_level))
         setup_render_settings(calc_resolution)
     
     # Bake the cubemap
@@ -354,15 +355,18 @@ def bake_and_save_cubemap(cube_probe, image_name, output_dir, mip_level, roughne
     
     return True
 
-def bake_cubemap(should_render_skybox=False, original_tonemap_setting=None):
+def bake_cubemap(should_render_skybox=False, original_tonemap_setting=None, base_resolution=512):
     """Main function to bake the cubemap with multiple roughness levels."""
     try:
         output_dir = setup_output_directory()
         cube_probe = get_cube_probe()
         
+        # Get dynamic mip levels and configurations based on resolution
+        mip_levels = get_dynamic_mip_levels(base_resolution)
+        cubemap_configs = get_dynamic_cubemap_configs(base_resolution)
+        
         # Define roughness levels properly distributed from 0.0 to 1.0 across mip levels
-        # For 10 mip levels, we need 10 roughness values
-        max_mip_levels = 10
+        max_mip_levels = len(mip_levels)
         roughness_values = [i / (max_mip_levels - 1) for i in range(max_mip_levels)]
         
         # Process each roughness level
@@ -374,15 +378,18 @@ def bake_cubemap(should_render_skybox=False, original_tonemap_setting=None):
             image_name = f"cubemap_mip{mip_level}"
             
             # Bake the cubemap for this roughness level
-            if not bake_and_save_cubemap(cube_probe, image_name, output_dir, mip_level, roughness):
+            if not bake_and_save_cubemap(cube_probe, image_name, output_dir, mip_level, roughness, base_resolution=base_resolution):
                 # Continue with next roughness level instead of failing completely
                 continue
         
-        # Create diffuse image with fixed 32x32 per face dimensions
+        # Create diffuse image using dynamic configuration
+        diffuse_config = cubemap_configs["diffuse"]
         diffuse_image_name = "cubemap_diffuse"
         
-        # Bake the diffuse cubemap with maximum roughness and 32x32 resolution
-        if not bake_and_save_cubemap(cube_probe, diffuse_image_name, output_dir, 4, 1.0, 32):
+        # Bake the diffuse cubemap with maximum roughness and calculated resolution
+        if not bake_and_save_cubemap(cube_probe, diffuse_image_name, output_dir, 
+                                   diffuse_config["mip_level"], 1.0, 
+                                   diffuse_config["resolution"], base_resolution):
             print("Failed to bake diffuse cubemap")
         
         # Render skybox if requested
@@ -393,11 +400,14 @@ def bake_cubemap(should_render_skybox=False, original_tonemap_setting=None):
             if not set_tonemap(False):
                 print("Warning: Failed to disable tonemap for skybox rendering")
             
-            # Create skybox image with full resolution (mip 0)
+            # Create skybox image using dynamic configuration
+            skybox_config = cubemap_configs["skybox"]
             skybox_image_name = "cubemap_skybox"
             
             # Bake the skybox cubemap with minimum roughness and full resolution
-            skybox_success = bake_and_save_cubemap(cube_probe, skybox_image_name, output_dir, 0, 0.0, 512)
+            skybox_success = bake_and_save_cubemap(cube_probe, skybox_image_name, output_dir, 
+                                                 skybox_config["mip_level"], 0.0, 
+                                                 skybox_config["resolution"], base_resolution)
             
             if not skybox_success:
                 print("Failed to bake skybox cubemap")
@@ -478,10 +488,21 @@ if __name__ == "__main__":
                 except ValueError:
                     print(f"Invalid skybox value: {args[3]}, must be 0 or 1")
             
+            # Parse resolution setting (fifth argument)
+            base_resolution = 512  # Default fallback value
+            if len(args) > 4:
+                try:
+                    base_resolution = int(args[4])
+                    print(f"Using base resolution: {base_resolution}x{base_resolution}")
+                except ValueError:
+                    print(f"Invalid resolution value: {args[4]}, must be a number")
+                    base_resolution = 512
+            
         except ValueError:
             print("No command line arguments provided, using default settings")
+            base_resolution = 512
         
-        if not bake_cubemap(should_render_skybox, original_tonemap_setting):
+        if not bake_cubemap(should_render_skybox, original_tonemap_setting, base_resolution):
             print("Baking failed!")
             sys.exit(1)
     except Exception as e:

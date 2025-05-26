@@ -3,9 +3,8 @@
 import os
 import sys
 import subprocess
-import glob
 import argparse
-from config import MIP_LEVELS, VK_FORMAT, KTX_CONFIGS, FILE_PATTERNS, get_mip_levels_for_ktx, get_ktx_levels_count
+from config import VK_FORMAT, KTX_CONFIGS, FILE_PATTERNS, get_mip_levels_for_ktx, get_ktx_levels_count
 
 def ensure_directory(path):
     """Create directory if it doesn't exist."""
@@ -13,7 +12,7 @@ def ensure_directory(path):
         os.makedirs(path, exist_ok=True)
     return path
 
-def create_ktx_file(ktx_type, input_dir, output_name, output_dir="assets", skip_last_mip=True, progress=None, task_id=None):
+def create_ktx_file(ktx_type, input_dir, output_name, output_dir="assets", skip_last_mip=True, base_resolution=512, progress=None, task_id=None):
     """Create a KTX2 file from cubemap faces.
     
     Args:
@@ -21,7 +20,8 @@ def create_ktx_file(ktx_type, input_dir, output_name, output_dir="assets", skip_
         input_dir: Directory containing the input files
         output_name: Base name for output file
         output_dir: Directory to save the KTX file
-        skip_last_mip: Whether to skip mip level 9 (1x1 per face) for specular KTX
+        skip_last_mip: Whether to skip the last mip level (1x1 per face) for specular KTX
+        base_resolution: Base resolution for dynamic configuration
         progress: Optional progress bar instance
         task_id: Optional task ID for the progress bar
         
@@ -38,10 +38,10 @@ def create_ktx_file(ktx_type, input_dir, output_name, output_dir="assets", skip_
     
     if ktx_type == "specular":
         # Use filtered mip levels for specular KTX
-        mip_levels_to_use = get_mip_levels_for_ktx(skip_last_mip)
+        mip_levels_to_use = get_mip_levels_for_ktx(base_resolution, skip_last_mip)
         source_dirs = [os.path.join(input_dir, f"mip{i}") for i in mip_levels_to_use]
         # Get dynamic levels count
-        levels_count = get_ktx_levels_count(skip_last_mip)
+        levels_count = get_ktx_levels_count(base_resolution, skip_last_mip)
     elif ktx_type == "diffuse":
         source_dirs = [os.path.join(input_dir, "diffuse")]
         levels_count = config["levels"]
@@ -118,19 +118,19 @@ def create_ktx_file(ktx_type, input_dir, output_name, output_dir="assets", skip_
     except Exception:
         return False, None, 0
 
-def create_specular_ktx(input_dir, output_name, output_dir="assets", skip_last_mip=True, progress=None, task_id=None):
+def create_specular_ktx(input_dir, output_name, output_dir="assets", skip_last_mip=True, base_resolution=512, progress=None, task_id=None):
     """Create a specular KTX2 file from the cubemap faces."""
-    return create_ktx_file("specular", input_dir, output_name, output_dir, skip_last_mip, progress, task_id)
+    return create_ktx_file("specular", input_dir, output_name, output_dir, skip_last_mip, base_resolution, progress, task_id)
 
-def create_diffuse_ktx(input_dir, output_name, output_dir="assets", skip_last_mip=True, progress=None, task_id=None):
+def create_diffuse_ktx(input_dir, output_name, output_dir="assets", skip_last_mip=True, base_resolution=512, progress=None, task_id=None):
     """Create a diffuse KTX2 file from the cubemap faces."""
-    return create_ktx_file("diffuse", input_dir, output_name, output_dir, skip_last_mip, progress, task_id)
+    return create_ktx_file("diffuse", input_dir, output_name, output_dir, skip_last_mip, base_resolution, progress, task_id)
 
-def create_skybox_ktx(input_dir, output_name, output_dir="assets", skip_last_mip=True, progress=None, task_id=None):
+def create_skybox_ktx(input_dir, output_name, output_dir="assets", skip_last_mip=True, base_resolution=512, progress=None, task_id=None):
     """Create a skybox KTX2 file from the skybox directory."""
-    return create_ktx_file("skybox", input_dir, output_name, output_dir, skip_last_mip, progress, task_id)
+    return create_ktx_file("skybox", input_dir, output_name, output_dir, skip_last_mip, base_resolution, progress, task_id)
 
-def create_ktx_files(input_dir="output/cropped", output_name="cubemap", output_dir="assets", create_skybox=False, skip_last_mip=True, progress=None, task_id=None):
+def create_ktx_files(input_dir="output/cropped", output_name="cubemap", output_dir="assets", create_skybox=False, skip_last_mip=True, base_resolution=512, progress=None, task_id=None):
     """Create specular and diffuse KTX2 files, and optionally a skybox KTX2 file.
     
     Args:
@@ -138,7 +138,8 @@ def create_ktx_files(input_dir="output/cropped", output_name="cubemap", output_d
         output_name: Base name for output files
         output_dir: Directory to save the KTX files
         create_skybox: Whether to create a skybox KTX file from mip0
-        skip_last_mip: Whether to skip mip level 9 (1x1 per face) for specular KTX
+        skip_last_mip: Whether to skip the last mip level (1x1 per face) for specular KTX
+        base_resolution: Base resolution for dynamic configuration
         progress: Optional progress bar instance
         task_id: Optional task ID for the progress bar
         
@@ -151,12 +152,12 @@ def create_ktx_files(input_dir="output/cropped", output_name="cubemap", output_d
         progress.refresh()
     
     # Create specular KTX
-    spec_success, spec_path, spec_size = create_specular_ktx(input_dir, output_name, output_dir, skip_last_mip, progress, task_id)
+    spec_success, spec_path, spec_size = create_specular_ktx(input_dir, output_name, output_dir, skip_last_mip, base_resolution, progress, task_id)
     if not spec_success:
         return False, {}
     
     # Create diffuse KTX
-    diff_success, diff_path, diff_size = create_diffuse_ktx(input_dir, output_name, output_dir, skip_last_mip, progress, task_id)
+    diff_success, diff_path, diff_size = create_diffuse_ktx(input_dir, output_name, output_dir, skip_last_mip, base_resolution, progress, task_id)
     if not diff_success:
         return False, {}
     
@@ -168,7 +169,7 @@ def create_ktx_files(input_dir="output/cropped", output_name="cubemap", output_d
     
     # Create skybox KTX if requested
     if create_skybox:
-        skybox_success, skybox_path, skybox_size = create_skybox_ktx(input_dir, output_name, output_dir, skip_last_mip, progress, task_id)
+        skybox_success, skybox_path, skybox_size = create_skybox_ktx(input_dir, output_name, output_dir, skip_last_mip, base_resolution, progress, task_id)
         if not skybox_success:
             return False, {}
         file_info["skybox"] = {"path": skybox_path, "size_mb": skybox_size}

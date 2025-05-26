@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
 
 import os
-import subprocess
-import glob
 import asyncio
 from rich.console import Console
 from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, TimeElapsedColumn, TimeRemainingColumn
-from concurrent.futures import ThreadPoolExecutor
-from config import MIP_LEVELS, CUBEMAP_FACES, CUBEMAP_CONFIGS, FILE_PATTERNS, OUTPUT_DIRS, BASE_RESOLUTION
+from config import CUBEMAP_FACES, FILE_PATTERNS, OUTPUT_DIRS, BASE_RESOLUTION, get_dynamic_mip_levels, get_dynamic_cubemap_configs
 
 # Output directory
 OUTPUT_DIR = OUTPUT_DIRS["cropped"]
@@ -106,14 +103,14 @@ async def extract_cubemap_face(input_path, output_path, x, y, size, white_point=
         console.print(f"[bold red]Exception processing {input_path}: {e}[/bold red]")
         return False
 
-async def process_roughness_level(roughness_index, output_subdir=None, progress=None, task_id=None, white_point=None):
+async def process_roughness_level(roughness_index, output_subdir=None, progress=None, task_id=None, white_point=None, base_resolution=BASE_RESOLUTION):
     """Process a specific mip level."""
     # Use mip level for filenames instead of roughness values
     mip_level = roughness_index
     input_file = FILE_PATTERNS["mip_input"].format(level=mip_level)
     
-    # Calculate face size based on mip level
-    size = BASE_RESOLUTION // (2 ** mip_level)
+    # Calculate face size based on mip level and dynamic resolution
+    size = base_resolution // (2 ** mip_level)
     
     # Define the target directory
     target_dir = OUTPUT_DIR
@@ -181,7 +178,7 @@ async def process_roughness_level(roughness_index, output_subdir=None, progress=
     
     return success
 
-async def process_cubemap_type(cubemap_type, progress=None, task_id=None, external_progress=False, white_point=None):
+async def process_cubemap_type(cubemap_type, progress=None, task_id=None, external_progress=False, white_point=None, base_resolution=BASE_RESOLUTION):
     """Process a specific type of cubemap into its own folder.
     
     Args:
@@ -190,15 +187,19 @@ async def process_cubemap_type(cubemap_type, progress=None, task_id=None, extern
         task_id: Optional task ID for the progress bar
         external_progress: Whether using external progress tracking
         white_point: Optional white point value for reverse tone mapping
+        base_resolution: Base resolution for dynamic configuration
         
     Returns:
         bool: Success status
     """
+    # Get dynamic cubemap configurations based on resolution
+    dynamic_configs = get_dynamic_cubemap_configs(base_resolution)
+    
     # Configure based on cubemap type
-    if cubemap_type not in CUBEMAP_CONFIGS:
+    if cubemap_type not in dynamic_configs:
         raise ValueError(f"Unknown cubemap type: {cubemap_type}")
     
-    config = CUBEMAP_CONFIGS[cubemap_type]
+    config = dynamic_configs[cubemap_type]
     
     input_file = FILE_PATTERNS[f"{cubemap_type}_input"]
     size = config["size"]
@@ -251,25 +252,29 @@ async def process_cubemap_type(cubemap_type, progress=None, task_id=None, extern
     
     return success
 
-async def process_diffuse_cubemap(progress=None, task_id=None, external_progress=False, white_point=None):
+async def process_diffuse_cubemap(progress=None, task_id=None, external_progress=False, white_point=None, base_resolution=BASE_RESOLUTION):
     """Process the diffuse cubemap into its own folder with specified face size."""
-    return await process_cubemap_type("diffuse", progress, task_id, external_progress, white_point)
+    return await process_cubemap_type("diffuse", progress, task_id, external_progress, white_point, base_resolution)
 
-async def process_skybox_cubemap(progress=None, task_id=None, external_progress=False, white_point=None):
+async def process_skybox_cubemap(progress=None, task_id=None, external_progress=False, white_point=None, base_resolution=BASE_RESOLUTION):
     """Process the skybox cubemap into its own folder with full resolution."""
-    return await process_cubemap_type("skybox", progress, task_id, external_progress, white_point)
+    return await process_cubemap_type("skybox", progress, task_id, external_progress, white_point, base_resolution)
 
-async def process_mip_levels(external_progress=None, external_task_id=None, white_point=None):
+async def process_mip_levels(external_progress=None, external_task_id=None, white_point=None, base_resolution=BASE_RESOLUTION):
     """Process all mip levels in parallel.
     
     Args:
         external_progress: Optional external Progress instance
         external_task_id: Optional task ID in the external progress
         white_point: Optional white point value for reverse tone mapping
+        base_resolution: Base resolution for dynamic configuration
     """
     # Create output directory if it doesn't exist
     if not os.path.exists(OUTPUT_DIR):
         os.makedirs(OUTPUT_DIR, exist_ok=True)
+    
+    # Get dynamic mip levels based on resolution
+    dynamic_mip_levels = get_dynamic_mip_levels(base_resolution)
     
     # Determine if we're using external progress or creating our own
     using_external_progress = external_progress is not None and external_task_id is not None
@@ -296,36 +301,37 @@ async def process_mip_levels(external_progress=None, external_task_id=None, whit
         # Add a task for processing all mip levels if not using external progress
         mip_task_id = None
         if not using_external_progress:
-            mip_task_id = progress_context.add_task("[magenta]Processing mip levels", total=len(MIP_LEVELS))
+            mip_task_id = progress_context.add_task("[magenta]Processing mip levels", total=len(dynamic_mip_levels))
         
         # Create tasks for all mip levels
         tasks = []
-        for i, mip_level in enumerate(MIP_LEVELS):
+        for i, mip_level in enumerate(dynamic_mip_levels):
             mip_dir = f"mip{mip_level}"
             # Pass the progress if not using external progress
             if not using_external_progress:
-                tasks.append(process_roughness_level(mip_level, mip_dir, progress_context, mip_task_id, white_point))
+                tasks.append(process_roughness_level(mip_level, mip_dir, progress_context, mip_task_id, white_point, base_resolution))
             else:
                 # Process without nested progress bars
-                tasks.append(process_roughness_level(mip_level, mip_dir, white_point=white_point))
+                tasks.append(process_roughness_level(mip_level, mip_dir, white_point=white_point, base_resolution=base_resolution))
                 # Update external progress after each mip level
                 if i > 0:  # Only update after first mip level to avoid jumping too fast
-                    external_progress.update(external_task_id, advance=1/11)  # Advance by 1/11th of total
+                    total_steps = len(dynamic_mip_levels) + 1  # +1 for diffuse, +1 for skybox if enabled
+                    external_progress.update(external_task_id, advance=1/total_steps)  # Advance proportionally
         
         # Process diffuse map
         if using_external_progress:
-            diffuse_task = process_diffuse_cubemap(external_progress, external_task_id, True, white_point)
+            diffuse_task = process_diffuse_cubemap(external_progress, external_task_id, True, white_point, base_resolution)
         else:
-            diffuse_task = process_diffuse_cubemap(progress_context, white_point=white_point)
+            diffuse_task = process_diffuse_cubemap(progress_context, white_point=white_point, base_resolution=base_resolution)
         tasks.append(diffuse_task)
         
         # Process skybox map if it exists
         skybox_file = "output/cubemap_skybox.hdr"
         if os.path.exists(skybox_file):
             if using_external_progress:
-                skybox_task = process_skybox_cubemap(external_progress, external_task_id, True, white_point)
+                skybox_task = process_skybox_cubemap(external_progress, external_task_id, True, white_point, base_resolution)
             else:
-                skybox_task = process_skybox_cubemap(progress_context, white_point=white_point)
+                skybox_task = process_skybox_cubemap(progress_context, white_point=white_point, base_resolution=base_resolution)
             tasks.append(skybox_task)
         
         # Wait for all tasks to complete
@@ -333,7 +339,8 @@ async def process_mip_levels(external_progress=None, external_task_id=None, whit
         
         # Update external progress to complete if using it
         if using_external_progress:
-            external_progress.update(external_task_id, advance=1/11, description="[cyan]Cropping complete")
+            total_steps = len(dynamic_mip_levels) + 1  # +1 for diffuse, +1 for skybox if enabled
+            external_progress.update(external_task_id, advance=1/total_steps, description="[cyan]Cropping complete")
         
         console.print("[bold green]Cubemap extraction complete![/bold green]")
         

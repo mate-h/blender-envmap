@@ -12,6 +12,7 @@ from rich.table import Table
 from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, TimeElapsedColumn
 from crop import process_mip_levels
 from create_ktx import create_ktx_files
+from config import detect_input_resolution, calculate_cubemap_resolution_from_input
 
 # Set up rich console
 console = Console()
@@ -110,6 +111,7 @@ def main():
     parser.add_argument("--output", default="assets", help="Output directory for KTX files")
     parser.add_argument("--name", help="Base name for output KTX files")
     parser.add_argument("--blend-file", default="eq2cube.blend", help="Path to Blender file")
+    parser.add_argument("--resolution", type=int, help="Output cubemap face resolution (default: auto-detect from input)")
     
     # Tonemap arguments (mutually exclusive)
     tonemap_group = parser.add_mutually_exclusive_group()
@@ -139,6 +141,27 @@ def main():
     # Handle mip9 logic
     should_skip_last_mip = not args.include_last_mip  # Skip by default unless --include-last-mip is specified
     
+    # Detect input resolution and calculate output resolution
+    if args.resolution is not None:
+        output_resolution = args.resolution
+        console.print(f"[cyan]Using specified output resolution: {output_resolution}x{output_resolution}[/cyan]")
+    else:
+        # Auto-detect from input image
+        input_dims = detect_input_resolution(args.environment_map)
+        if input_dims:
+            input_width, input_height = input_dims
+            output_resolution = calculate_cubemap_resolution_from_input(input_width, input_height)
+            console.print(f"[cyan]Detected input resolution: {input_width}x{input_height}[/cyan]")
+            console.print(f"[cyan]Calculated output resolution: {output_resolution}x{output_resolution}[/cyan]")
+        else:
+            output_resolution = 512  # Default fallback
+            console.print(f"[yellow]Could not detect input resolution, using default: {output_resolution}x{output_resolution}[/yellow]")
+    
+    # Validate resolution (must be power of 2)
+    if output_resolution <= 0 or (output_resolution & (output_resolution - 1)) != 0:
+        console.print(f"[bold red]Error:[/bold red] Resolution must be a positive power of 2 (e.g., 256, 512, 1024)")
+        return 1
+    
     # If name is not provided, use the input file name without path or extension
     if args.name is None:
         base_name = os.path.basename(args.environment_map)
@@ -156,6 +179,7 @@ def main():
     settings.add_row("Environment Map", args.environment_map)
     settings.add_row("Output Directory", args.output)
     settings.add_row("Base Name", args.name)
+    settings.add_row("Output Resolution", f"{output_resolution}x{output_resolution}")
     settings.add_row("Blend File", args.blend_file)
     settings.add_row("Tonemapping", "Enabled" if should_tonemap else "Disabled")
     settings.add_row("Skybox", "Enabled" if should_create_skybox else "Disabled")
@@ -207,6 +231,9 @@ def main():
         # Add skybox setting
         blender_cmd.append("1" if should_create_skybox else "0")
         
+        # Add output resolution
+        blender_cmd.append(str(output_resolution))
+        
         # Run blender command with progress tracking
         if not run_command(blender_cmd, "Baking cubemap", progress, task1, parse_mip=True, skybox_enabled=should_create_skybox):
             return 1
@@ -224,9 +251,10 @@ def main():
         
         # Direct call to process_mip_levels with our progress bar
         try:
-            # Pass the white_point value to process_mip_levels
+            # Pass the white_point value and output resolution to process_mip_levels
             result = asyncio.run(process_mip_levels(progress, task2, 
-                                                    white_point=args.white_point))
+                                                    white_point=args.white_point,
+                                                    base_resolution=output_resolution))
             if not result:
                 console.print("[bold red]Error in cubemap cropping process[/bold red]")
                 return 1
@@ -250,6 +278,7 @@ def main():
                 output_dir=args.output,
                 create_skybox=should_create_skybox,
                 skip_last_mip=should_skip_last_mip,
+                base_resolution=output_resolution,
                 progress=progress,
                 task_id=task3
             )
