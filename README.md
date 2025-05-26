@@ -25,7 +25,7 @@ A command-line tool that generates KTX2 environment maps for the Bevy game engin
 
 Generate environment maps by running (example showing the default values):
 ```bash
-blender-envmap --white-point 1.0 --name cubemap --output assets assets/spiaggia_di_mondello_2k.exr
+blender-envmap assets/spiaggia_di_mondello_2k.exr [args]
 ```
 
 The generated files will be saved in the output directory, using the name argument with specular and diffuse suffixes.
@@ -36,3 +36,4 @@ The generated files will be saved in the output directory, using the name argume
 - Name: The name of the environment map file.
 - Output: The output directory for the environment map files.
 - Blend File: The path to the Blender file to use for baking the environment map.
+- Tonemap/No Tonemap: Whether to tonemap the environment map before filtering (the result is reverse tonemapped after filtering).

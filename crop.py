@@ -25,7 +25,8 @@ async def extract_cubemap_face(input_path, output_path, x, y, size, white_point=
             "oiiotool",
             input_path,
             # Cut the region we want
-            "--cut", f"{x},{y},{x+size-1},{y+size-1}"  # Subtract 1 from end coordinates to get exact size
+            "--cut", f"{x},{y},{x+size-1},{y+size-1}",  # Subtract 1 from end coordinates to get exact size
+            "-d", "half"
         ]
         
         # If white point is provided, apply the reverse tonemapping formula using:
@@ -90,6 +91,17 @@ async def extract_cubemap_face(input_path, output_path, x, y, size, white_point=
             resize_stdout, resize_stderr = await resize_process.communicate()
             if resize_process.returncode != 0:
                 console.print(f"[bold red]Error resizing: {resize_stderr.decode()}[/bold red]")
+
+        # Fix nan values
+        fixnan_cmd = ["oiiotool", "--fixnan", "box3", output_path, "-o", output_path]
+        fixnan_process = await asyncio.create_subprocess_exec(
+            *fixnan_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        fixnan_stdout, fixnan_stderr = await fixnan_process.communicate()
+        if fixnan_process.returncode != 0:
+            console.print(f"[bold red]Error fixing nan values: {fixnan_stderr.decode()}[/bold red]")
         
         return True
     except Exception as e:
@@ -240,6 +252,68 @@ async def process_diffuse_cubemap(progress=None, task_id=None, external_progress
     
     return success
 
+async def process_skybox_cubemap(progress=None, task_id=None, external_progress=False, white_point=None):
+    """Process the skybox cubemap into its own folder with full resolution."""
+    input_file = "output/cubemap_skybox.hdr"
+    
+    # Full size for skybox cubemap (512x512 per face)
+    size = 512
+    
+    # Define skybox target directory
+    skybox_dir = os.path.join(OUTPUT_DIR, "skybox")
+    
+    # Create skybox directory if it doesn't exist
+    if not os.path.exists(skybox_dir):
+        os.makedirs(skybox_dir, exist_ok=True)
+    
+    # Check if input file exists
+    if not os.path.exists(input_file):
+        console.print(f"[bold red]Input file not found: {input_file}[/bold red]")
+        return False
+    
+    # Create task ID for skybox if we have a progress bar and not using external progress
+    skybox_task_id = None
+    if progress and not external_progress:
+        skybox_task_id = progress.add_task("[blue]Skybox cubemap", total=6)
+    elif progress and external_progress and task_id is not None:
+        # Update external progress if provided
+        progress.update(task_id, description="[cyan]Cropping skybox cubemap")
+    
+    # Define face positions for extraction (same layout as specular maps)
+    faces = [
+        ("0001.exr", size*3, size),    # BACK
+        ("0002.exr", size, size),      # FRONT
+        ("0003.exr", size*2, 0),       # TOP
+        ("0004.exr", size*2, size*2),  # BOTTOM
+        ("0005.exr", size*2, size),    # RIGHT
+        ("0006.exr", 0, size),         # LEFT
+    ]
+    
+    success = True
+    face_tasks = []
+    
+    # Process all faces in parallel
+    for output_file, x, y in faces:
+        output_path = os.path.join(skybox_dir, output_file)
+        # Note: For skybox, we don't apply white point correction since we want raw HDR values
+        face_tasks.append(extract_cubemap_face(input_file, output_path, x, y, size, None))
+    
+    # Wait for all face extractions to complete
+    face_results = await asyncio.gather(*face_tasks)
+    
+    # Update progress bar if provided and not using external progress
+    if progress and skybox_task_id is not None and not external_progress:
+        progress.update(skybox_task_id, completed=6)
+    elif progress and external_progress and task_id is not None:
+        # Update external progress if provided
+        progress.update(task_id, advance=1/12)  # Advance by 1/12th of total for skybox
+    
+    # Check if all faces were extracted successfully
+    if not all(face_results):
+        success = False
+    
+    return success
+
 async def process_mip_levels(external_progress=None, external_task_id=None, white_point=None):
     """Process all mip levels in parallel.
     
@@ -299,6 +373,15 @@ async def process_mip_levels(external_progress=None, external_task_id=None, whit
         else:
             diffuse_task = process_diffuse_cubemap(progress_context, white_point=white_point)
         tasks.append(diffuse_task)
+        
+        # Process skybox map if it exists
+        skybox_file = "output/cubemap_skybox.hdr"
+        if os.path.exists(skybox_file):
+            if using_external_progress:
+                skybox_task = process_skybox_cubemap(external_progress, external_task_id, True, white_point)
+            else:
+                skybox_task = process_skybox_cubemap(progress_context, white_point=white_point)
+            tasks.append(skybox_task)
         
         # Wait for all tasks to complete
         results = await asyncio.gather(*tasks)

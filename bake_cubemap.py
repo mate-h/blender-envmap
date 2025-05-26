@@ -108,6 +108,62 @@ def set_white_point(white_point_value):
         print(f"Error setting white point value: {e}")
         return False
 
+def set_tonemap(should_tonemap):
+    """Set the tonemapping factor by finding the node with label 'ShouldTonemap'."""
+    # Make sure we have a world
+    if not bpy.data.worlds:
+        print("Error: No world found in the scene!")
+        return False
+    
+    world = bpy.data.worlds[0]
+    
+    # Verify world uses nodes
+    if not world.use_nodes:
+        print("Error: World does not use nodes!")
+        return False
+    
+    nodes = world.node_tree.nodes
+    
+    # Find ShouldTonemap node
+    tonemap_node = None
+    for node in nodes:
+        if node.label == "ShouldTonemap":
+            tonemap_node = node
+            break
+    
+    if not tonemap_node:
+        print("Error: ShouldTonemap node not found in the world node tree!")
+        return False
+    
+    # Set the factor value
+    try:
+        factor_value = 1.0 if should_tonemap else 0.0
+        
+        # Check if it has a Factor input (common for Mix nodes)
+        if "Factor" in tonemap_node.inputs:
+            tonemap_node.inputs["Factor"].default_value = factor_value
+            print(f"Successfully set tonemap factor to: {factor_value}")
+            return True
+        # Check if it has a Fac input (older Blender versions)
+        elif "Fac" in tonemap_node.inputs:
+            tonemap_node.inputs["Fac"].default_value = factor_value
+            print(f"Successfully set tonemap factor to: {factor_value}")
+            return True
+        # Check if it's a Value node
+        elif tonemap_node.type == 'VALUE':
+            tonemap_node.outputs[0].default_value = factor_value
+            print(f"Successfully set tonemap value to: {factor_value}")
+            return True
+        else:
+            print(f"Error: ShouldTonemap node does not have a Factor, Fac input, or is not a Value node")
+            print(f"Node type: {tonemap_node.type}")
+            print(f"Available inputs: {[input.name for input in tonemap_node.inputs]}")
+            return False
+        
+    except Exception as e:
+        print(f"Error setting tonemap factor: {e}")
+        return False
+
 def create_bake_image(name, output_dir, mip_level=0):
     """Create a new image for baking with specified mip level."""
     base_size = 512
@@ -241,7 +297,7 @@ def bake_single_cubemap(cube_probe, image, mip_level, output_dir):
         print(f"Error during baking: {e}")
         return False
 
-def bake_cubemap():
+def bake_cubemap(should_render_skybox=False, original_tonemap_setting=None):
     """Main function to bake the cubemap with multiple roughness levels."""
     try:
         output_dir = setup_output_directory()
@@ -330,6 +386,60 @@ def bake_cubemap():
             except Exception as e:
                 print(f"Warning: Failed to clean up image: {e}")
         
+        # Render skybox if requested
+        if should_render_skybox:
+            print("Loading cubemap_skybox")
+            
+            # Temporarily disable tonemap for skybox rendering
+            if not set_tonemap(False):
+                print("Warning: Failed to disable tonemap for skybox rendering")
+            
+            # Create skybox image with full resolution (mip 0)
+            skybox_image_name = "cubemap_skybox"
+            skybox_image = create_bake_image(skybox_image_name, output_dir, 0)
+            
+            # Set material to minimum roughness for crisp skybox
+            adjust_material_roughness("BakeMaterial", 0.0)
+            
+            # Setup render settings for full resolution skybox
+            setup_render_settings(512)
+            
+            # Bake the skybox cubemap
+            skybox_success = False
+            try:
+                # Select the cube probe
+                select_object(cube_probe)
+                
+                # Set up the image texture node for baking
+                if not setup_image_texture_node(cube_probe, skybox_image):
+                    print(f"Error: Failed to set up image texture node for skybox")
+                else:
+                    bpy.ops.object.bake(type='COMBINED', use_selected_to_active=False)
+                    skybox_image.file_format = 'HDR'
+                    skybox_image.save_render(filepath=os.path.join(output_dir, f"{skybox_image_name}.hdr"))
+                    skybox_success = True
+            except Exception as e:
+                print(f"Exception during baking for skybox cubemap: {e}")
+            
+            if not skybox_success:
+                print(f"Baking failed for skybox cubemap")
+                # Clean up the failed image
+                try:
+                    bpy.data.images.remove(skybox_image)
+                except:
+                    pass
+            else:
+                # Clean up the image after saving
+                try:
+                    bpy.data.images.remove(skybox_image)
+                except Exception as e:
+                    print(f"Warning: Failed to clean up skybox image: {e}")
+            
+            # Restore original tonemap setting
+            if original_tonemap_setting is not None:
+                if not set_tonemap(original_tonemap_setting):
+                    print("Warning: Failed to restore original tonemap setting")
+        
         return True
         
     except Exception as e:
@@ -362,7 +472,7 @@ if __name__ == "__main__":
                 print("No environment texture path provided, using default")
                 
             # Parse white point value (second argument)
-            if len(args) > 1:
+            if len(args) > 1 and args[1] != "None":
                 try:
                     white_point_value = float(args[1])
                     print(f"Setting white point value: {white_point_value}")
@@ -373,10 +483,38 @@ if __name__ == "__main__":
                 except ValueError:
                     print(f"Invalid white point value: {args[1]}, must be a number")
             
+            # Parse tonemap setting (third argument)
+            if len(args) > 2:
+                try:
+                    tonemap_value = int(args[2])
+                    should_tonemap = tonemap_value == 1
+                    print(f"Setting tonemap: {'enabled' if should_tonemap else 'disabled'}")
+                    
+                    # Set the tonemap setting
+                    if not set_tonemap(should_tonemap):
+                        print("Failed to set tonemap setting, continuing with default")
+                except ValueError:
+                    print(f"Invalid tonemap value: {args[2]}, must be 0 or 1")
+            
+            # Parse skybox setting (fourth argument)
+            should_render_skybox = False
+            original_tonemap_setting = None
+            if len(args) > 3:
+                try:
+                    skybox_value = int(args[3])
+                    should_render_skybox = skybox_value == 1
+                    print(f"Skybox rendering: {'enabled' if should_render_skybox else 'disabled'}")
+                    
+                    # Store the original tonemap setting if we need to render skybox
+                    if should_render_skybox and len(args) > 2:
+                        original_tonemap_setting = int(args[2]) == 1
+                except ValueError:
+                    print(f"Invalid skybox value: {args[3]}, must be 0 or 1")
+            
         except ValueError:
             print("No command line arguments provided, using default settings")
         
-        if not bake_cubemap():
+        if not bake_cubemap(should_render_skybox, original_tonemap_setting):
             print("Baking failed!")
             sys.exit(1)
     except Exception as e:

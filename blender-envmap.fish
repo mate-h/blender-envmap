@@ -20,5 +20,13 @@ complete -c blender-envmap -l name -r -d "Base name for output KTX files"
 # Option for blend file
 complete -c blender-envmap -l blend-file -r -F -a "(__fish_complete_suffix .blend)" -d "Path to Blender file" 
 
+# Tonemap options (mutually exclusive)
+complete -c blender-envmap -l tonemap -f -d "Enable tonemapping (default)"
+complete -c blender-envmap -l no-tonemap -f -d "Disable tonemapping"
+
+# Skybox options (mutually exclusive)
+complete -c blender-envmap -l skybox -f -d "Create a skybox KTX file (default)"
+complete -c blender-envmap -l no-skybox -f -d "Disable skybox creation"
+
 # Help flag
 complete -c blender-envmap -s h -l help -f -d "Show help message and exit" 

@@ -22,7 +22,7 @@ def ensure_directory(path):
         os.makedirs(path, exist_ok=True)
     return path
 
-def run_command(cmd, description, progress=None, task_id=None, parse_mip=False):
+def run_command(cmd, description, progress=None, task_id=None, parse_mip=False, skybox_enabled=False):
     """Run a shell command and display output.
     
     If parse_mip is True, parse the output for mip level updates and update progress.
@@ -46,10 +46,12 @@ def run_command(cmd, description, progress=None, task_id=None, parse_mip=False):
             # Initialize variables to track progress
             mip_pattern = re.compile(r'Loading cubemap_mip(\d+)')
             diffuse_pattern = re.compile(r'Loading cubemap_diffuse')
+            skybox_pattern = re.compile(r'Loading cubemap_skybox')
             current_mip = -1
             
-            # Set the total number of steps (mip0-9 + diffuse = 11)
-            progress.update(task_id, total=11)
+            # Set the total number of steps (mip0-9 + diffuse + skybox if enabled = 11 or 12)
+            total_steps = 12 if skybox_enabled else 11
+            progress.update(task_id, total=total_steps)
             progress.refresh()
             
             # Process output line by line
@@ -72,6 +74,11 @@ def run_command(cmd, description, progress=None, task_id=None, parse_mip=False):
                 # Check for diffuse map
                 if diffuse_pattern.search(line):
                     progress.update(task_id, completed=11, description="[cyan]Baking cubemap... (diffuse)")
+                    progress.refresh()
+                
+                # Check for skybox
+                if skybox_pattern.search(line):
+                    progress.update(task_id, completed=12, description="[cyan]Baking cubemap... (skybox)")
                     progress.refresh()
             
             # Wait for the process to complete
@@ -101,10 +108,31 @@ def main():
     # Optional arguments
     parser.add_argument("--white-point", type=float, help="Value for the white point node in the world shader")
     parser.add_argument("--output", default="assets", help="Output directory for KTX files")
-    parser.add_argument("--name", default="cubemap", help="Base name for output KTX files")
+    parser.add_argument("--name", help="Base name for output KTX files")
     parser.add_argument("--blend-file", default="eq2cube.blend", help="Path to Blender file")
     
+    # Tonemap arguments (mutually exclusive)
+    tonemap_group = parser.add_mutually_exclusive_group()
+    tonemap_group.add_argument("--tonemap", action="store_true", default=True, help="Enable tonemapping (default)")
+    tonemap_group.add_argument("--no-tonemap", action="store_true", help="Disable tonemapping")
+    
+    # Skybox arguments (mutually exclusive)
+    skybox_group = parser.add_mutually_exclusive_group()
+    skybox_group.add_argument("--skybox", action="store_true", default=True, help="Create a skybox KTX file (default)")
+    skybox_group.add_argument("--no-skybox", action="store_true", help="Disable skybox creation")
+    
     args = parser.parse_args()
+    
+    # Handle tonemap logic
+    should_tonemap = args.tonemap and not args.no_tonemap
+    
+    # Handle skybox logic
+    should_create_skybox = args.skybox and not args.no_skybox
+    
+    # If name is not provided, use the input file name without path or extension
+    if args.name is None:
+        base_name = os.path.basename(args.environment_map)
+        args.name = os.path.splitext(base_name)[0]
     
     # Display a fancy header
     console.print(Panel("[bold]Blender Environment Map Baker[/bold]", 
@@ -119,6 +147,8 @@ def main():
     settings.add_row("Output Directory", args.output)
     settings.add_row("Base Name", args.name)
     settings.add_row("Blend File", args.blend_file)
+    settings.add_row("Tonemapping", "Enabled" if should_tonemap else "Disabled")
+    settings.add_row("Skybox", "Enabled" if should_create_skybox else "Disabled")
     
     if args.white_point is not None:
         settings.add_row("White Point Value", str(args.white_point))
@@ -157,9 +187,17 @@ def main():
         
         if args.white_point is not None:
             blender_cmd.append(str(args.white_point))
+        else:
+            blender_cmd.append("None")  # Placeholder for white point
+        
+        # Add tonemap setting
+        blender_cmd.append("1" if should_tonemap else "0")
+        
+        # Add skybox setting
+        blender_cmd.append("1" if should_create_skybox else "0")
         
         # Run blender command with progress tracking
-        if not run_command(blender_cmd, "Baking cubemap", progress, task1, parse_mip=True):
+        if not run_command(blender_cmd, "Baking cubemap", progress, task1, parse_mip=True, skybox_enabled=should_create_skybox):
             return 1
         
         # Force refresh to update the display
@@ -199,6 +237,7 @@ def main():
                 input_dir="output/cropped", 
                 output_name=args.name, 
                 output_dir=args.output,
+                create_skybox=should_create_skybox,
                 progress=progress,
                 task_id=task3
             )
